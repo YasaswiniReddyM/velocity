@@ -6,9 +6,9 @@ from sentence_transformers import SentenceTransformer
 # Load the pre-trained model from Sentence Transformers
 model = SentenceTransformer('distilbert-base-nli-mean-tokens')
 
-# Load Excel files (Make sure these files are in the same directory or provide correct paths)
-problem_tickets_df = pd.read_excel("problem (2).xlsx")
-incidents_df = pd.read_excel("incident (2).xlsx")
+# Load Excel files
+problem_tickets_df = pd.read_excel("path/to/problem.xlsx")  # Update the path
+incidents_df = pd.read_excel("path/to/incident.xlsx")  # Update the path
 
 # Prepare text data
 problem_ticket_texts = (problem_tickets_df['Problem statement'].fillna('') + " " + problem_tickets_df['Tags'].fillna('')).tolist()
