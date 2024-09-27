@@ -1,72 +1,56 @@
 from flask import Flask, render_template, request, send_file
 import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
 
-# Initialize the Flask app
 app = Flask(__name__)
 
-# Load the pre-trained model from Sentence Transformers
-model = SentenceTransformer('distilbert-base-nli-mean-tokens')
+def parse_dates(date, formats):
+    for fmt in formats:
+        try:
+            return pd.to_datetime(date, format=fmt)
+        except ValueError:
+            continue
+    return pd.NaT  # Return Not a Time if all formats fail
+
+formats = ['%d-%m-%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%Y-%m-%d']  # Add formats as needed
 
 def process_tickets_and_incidents(problem_tickets_file, incidents_file):
-    # Load the problem ticket Excel file (with openpyxl engine specified)
-    problem_tickets_df = pd.read_excel(problem_tickets_file, engine='openpyxl')
+    # Load the problem ticket Excel file
+    problem_tickets_df = pd.read_excel(problem_tickets_file)
 
-    # Load the incident Excel file (with openpyxl engine specified)
-    incidents_df = pd.read_excel(incidents_file, engine='openpyxl')
+    # Load the incident Excel file
+    incidents_df = pd.read_excel(incidents_file)
 
-    # Prepare text data
-    problem_ticket_texts = (problem_tickets_df['Problem statement'].fillna('') + " " + problem_tickets_df['Tags'].fillna('')).tolist()
-    short_description_texts = incidents_df['Short description'].fillna('').tolist()
-    description_texts = incidents_df['Description'].fillna('').tolist()
-    resolution_notes_texts = incidents_df['Resolution notes'].fillna('').tolist()
-    tag_texts = incidents_df['Tags'].fillna('').tolist()
+    # Convert date columns to datetime type
+    problem_tickets_df['Opened'] = pd.to_datetime(problem_tickets_df['Opened'], errors='coerce')
+    problem_tickets_df['Closed'] = pd.to_datetime(problem_tickets_df['Closed'], errors='coerce')
+    incidents_df['Opened'] = pd.to_datetime(incidents_df['Opened'], errors='coerce')
 
-    # Get embeddings for problem ticket texts
-    problem_ticket_embeddings = model.encode(problem_ticket_texts)
+    # Initialize a dictionary to store the count of incidents for each problem ticket
+    problem_ticket_incident_count = {}
 
-    # Get embeddings for incident texts
-    short_description_embeddings = model.encode(short_description_texts)
-    description_embeddings = model.encode(description_texts)
-    resolution_notes_embeddings = model.encode(resolution_notes_texts)
-    tag_embeddings = model.encode(tag_texts)
+    # Iterate over each problem ticket
+    for index, ticket_row in problem_tickets_df.iterrows():
+        # Filter incidents where tag matches problem ticket tag and opened date is between ticket's opened and closed dates
+        matching_incidents = incidents_df[(incidents_df['Tags'] == ticket_row['Tags']) &
+                                          (incidents_df['Opened'] >= ticket_row['Opened']) &
+                                          (incidents_df['Opened'] <= ticket_row['Closed'])]
 
-    # Compute cosine similarity
-    similarity_short_description = cosine_similarity(problem_ticket_embeddings, short_description_embeddings)
-    similarity_description = cosine_similarity(problem_ticket_embeddings, description_embeddings)
-    similarity_resolution_notes = cosine_similarity(problem_ticket_embeddings, resolution_notes_embeddings)
-    similarity_tag = cosine_similarity(problem_ticket_embeddings, tag_embeddings)
+        # Count the number of matching incidents
+        incident_count = len(matching_incidents)
 
-    # Define similarity threshold
-    threshold = 0.87
+        # Store the count in the dictionary
+        problem_ticket_incident_count[ticket_row['Number']] = incident_count
 
-    # Count number of incidents impacted and list incident numbers for each problem ticket
-    num_impacted_incidents = []
-    impacted_incident_numbers = []
+    # Convert the dictionary to a DataFrame
+    incident_count_df = pd.DataFrame.from_dict(problem_ticket_incident_count, orient='index',
+                                               columns=['incident_count'])
 
-    for i in range(len(problem_ticket_texts)):
-        impacted_count = 0
-        impacted_numbers = []
+    # Merge the incident count DataFrame with the problem ticket DataFrame
+    merged_df = pd.merge(problem_tickets_df, incident_count_df, left_on='Number', right_index=True, how='left')
 
-        for j in range(len(short_description_texts)):
-            if (similarity_short_description[i, j] >= threshold or
-                similarity_description[i, j] >= threshold or
-                similarity_resolution_notes[i, j] >= threshold or
-                similarity_tag[i, j] >= threshold):
-                impacted_count += 1
-                impacted_numbers.append(incidents_df.iloc[j]['Number'])
-
-        num_impacted_incidents.append(impacted_count)
-        impacted_incident_numbers.append(impacted_numbers)
-
-    # Add the results to the problem_tickets_df
-    problem_tickets_df['num_impacted_incidents'] = num_impacted_incidents
-    problem_tickets_df['impacted_incident_numbers'] = impacted_incident_numbers
-
-    # Save the DataFrame to an Excel file (with openpyxl engine specified)
+    # Save the DataFrame to an Excel file
     output_excel_file = 'output.xlsx'
-    problem_tickets_df.to_excel(output_excel_file, engine='openpyxl', index=False)
+    merged_df.to_excel(output_excel_file, index=False)  # Set index=False to avoid saving DataFrame index as a separate column
 
     return output_excel_file
 
@@ -77,22 +61,16 @@ def index():
 @app.route('/process', methods=['POST'])
 def process():
     try:
-        # Get the uploaded Excel files
         problem_excel = request.files['problem_excel']
         incidents_excel = request.files['incidents_excel']
 
-        # Ensure both files are provided
         if not (problem_excel and incidents_excel):
-            return "Both Problem Ticket and Incident files are required.", 400
+            return "Files are required.", 400
 
-        # Save the uploaded files to disk
         problem_excel.save('problem.xlsx')
         incidents_excel.save('incidents.xlsx')
 
-        # Process the files
         output_file = process_tickets_and_incidents('problem.xlsx', 'incidents.xlsx')
-
-        # Send the processed file back to the user
         return send_file(output_file, as_attachment=True)
     except Exception as e:
         return f"An error occurred: {str(e)}", 500
