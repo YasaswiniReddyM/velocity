@@ -1,18 +1,19 @@
 from flask import Flask, render_template, request, send_file
 import pandas as pd
-import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-import os
 
+# Initialize the Flask app
 app = Flask(__name__)
 
-# Load the pre-trained model once
+# Load the pre-trained model from Sentence Transformers
 model = SentenceTransformer('distilbert-base-nli-mean-tokens')
 
 def process_tickets_and_incidents(problem_tickets_file, incidents_file):
-    # Load the problem tickets and incidents Excel files, specifying the engine
+    # Load the problem ticket Excel file (with openpyxl engine specified)
     problem_tickets_df = pd.read_excel(problem_tickets_file, engine='openpyxl')
+
+    # Load the incident Excel file (with openpyxl engine specified)
     incidents_df = pd.read_excel(incidents_file, engine='openpyxl')
 
     # Prepare text data
@@ -63,9 +64,9 @@ def process_tickets_and_incidents(problem_tickets_file, incidents_file):
     problem_tickets_df['num_impacted_incidents'] = num_impacted_incidents
     problem_tickets_df['impacted_incident_numbers'] = impacted_incident_numbers
 
-    # Save the DataFrame to an Excel file, specifying the engine
+    # Save the DataFrame to an Excel file (with openpyxl engine specified)
     output_excel_file = 'output.xlsx'
-    problem_tickets_df.to_excel(output_excel_file, index=False, engine='openpyxl')
+    problem_tickets_df.to_excel(output_excel_file, engine='openpyxl', index=False)
 
     return output_excel_file
 
@@ -76,19 +77,22 @@ def index():
 @app.route('/process', methods=['POST'])
 def process():
     try:
+        # Get the uploaded Excel files
         problem_excel = request.files['problem_excel']
         incidents_excel = request.files['incidents_excel']
 
-        # Validate if the files are indeed Excel files
-        if not (problem_excel and incidents_excel and problem_excel.filename.endswith('.xlsx') and incidents_excel.filename.endswith('.xlsx')):
-            return "Both files must be Excel files with .xlsx extension.", 400
+        # Ensure both files are provided
+        if not (problem_excel and incidents_excel):
+            return "Both Problem Ticket and Incident files are required.", 400
 
-        # Save the files with correct extensions
+        # Save the uploaded files to disk
         problem_excel.save('problem.xlsx')
-        incidents_excel.save('incident.xlsx')
+        incidents_excel.save('incidents.xlsx')
 
-        # Process the files and generate the output
-        output_file = process_tickets_and_incidents('problem.xlsx', 'incident.xlsx')
+        # Process the files
+        output_file = process_tickets_and_incidents('problem.xlsx', 'incidents.xlsx')
+
+        # Send the processed file back to the user
         return send_file(output_file, as_attachment=True)
     except Exception as e:
         return f"An error occurred: {str(e)}", 500
