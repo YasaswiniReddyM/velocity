@@ -7,8 +7,8 @@ from sentence_transformers import SentenceTransformer
 model = SentenceTransformer('distilbert-base-nli-mean-tokens')
 
 # Load Excel files
-problem_tickets_df = pd.read_excel("path/to/problem.xlsx")  # Update the path
-incidents_df = pd.read_excel("path/to/incident.xlsx")  # Update the path
+problem_tickets_df = pd.read_excel("/content/problem.xlsx")
+incidents_df = pd.read_excel("/content/incidents.xlsx")
 
 # Prepare text data
 problem_ticket_texts = (problem_tickets_df['Problem statement'].fillna('') + " " + problem_tickets_df['Tags'].fillna('')).tolist()

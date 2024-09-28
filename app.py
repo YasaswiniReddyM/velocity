@@ -1,17 +1,13 @@
 from flask import Flask, render_template, request, send_file
 import pandas as pd
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer
 
 app = Flask(__name__)
 
-def parse_dates(date, formats):
-    for fmt in formats:
-        try:
-            return pd.to_datetime(date, format=fmt)
-        except ValueError:
-            continue
-    return pd.NaT  # Return Not a Time if all formats fail
-
-formats = ['%d-%m-%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%Y-%m-%d']  # Add formats as needed
+# Load the pre-trained model from Sentence Transformers
+model = SentenceTransformer('distilbert-base-nli-mean-tokens')
 
 def process_tickets_and_incidents(problem_tickets_file, incidents_file):
     # Load the problem ticket Excel file
@@ -20,37 +16,60 @@ def process_tickets_and_incidents(problem_tickets_file, incidents_file):
     # Load the incident Excel file
     incidents_df = pd.read_excel(incidents_file)
 
-    # Convert date columns to datetime type
-    problem_tickets_df['Opened'] = pd.to_datetime(problem_tickets_df['Opened'], errors='coerce')
-    problem_tickets_df['Closed'] = pd.to_datetime(problem_tickets_df['Closed'], errors='coerce')
-    incidents_df['Opened'] = pd.to_datetime(incidents_df['Opened'], errors='coerce')
+    # Prepare text data from problem tickets and incidents
+    problem_ticket_texts = (problem_tickets_df['Problem statement'].fillna('') + " " + problem_tickets_df['Tags'].fillna('')).tolist()
 
-    # Initialize a dictionary to store the count of incidents for each problem ticket
-    problem_ticket_incident_count = {}
+    short_description_texts = incidents_df['Short description'].fillna('').tolist()
+    description_texts = incidents_df['Description'].fillna('').tolist()
+    resolution_notes_texts = incidents_df['Resolution notes'].fillna('').tolist()
+    tag_texts = incidents_df['Tags'].fillna('').tolist()
 
-    # Iterate over each problem ticket
-    for index, ticket_row in problem_tickets_df.iterrows():
-        # Filter incidents where tag matches problem ticket tag and opened date is between ticket's opened and closed dates
-        matching_incidents = incidents_df[(incidents_df['Tags'] == ticket_row['Tags']) &
-                                          (incidents_df['Opened'] >= ticket_row['Opened']) &
-                                          (incidents_df['Opened'] <= ticket_row['Closed'])]
+    # Get embeddings for problem ticket texts
+    problem_ticket_embeddings = model.encode(problem_ticket_texts)
 
-        # Count the number of matching incidents
-        incident_count = len(matching_incidents)
+    # Get embeddings for incident texts
+    short_description_embeddings = model.encode(short_description_texts)
+    description_embeddings = model.encode(description_texts)
+    resolution_notes_embeddings = model.encode(resolution_notes_texts)
+    tag_embeddings = model.encode(tag_texts)
 
-        # Store the count in the dictionary
-        problem_ticket_incident_count[ticket_row['Number']] = incident_count
+    # Compute cosine similarity
+    similarity_short_description = cosine_similarity(problem_ticket_embeddings, short_description_embeddings)
+    similarity_description = cosine_similarity(problem_ticket_embeddings, description_embeddings)
+    similarity_resolution_notes = cosine_similarity(problem_ticket_embeddings, resolution_notes_embeddings)
+    similarity_tag = cosine_similarity(problem_ticket_embeddings, tag_embeddings)
 
-    # Convert the dictionary to a DataFrame
-    incident_count_df = pd.DataFrame.from_dict(problem_ticket_incident_count, orient='index',
-                                               columns=['incident_count'])
+    # Define similarity threshold
+    threshold = 0.87
 
-    # Merge the incident count DataFrame with the problem ticket DataFrame
-    merged_df = pd.merge(problem_tickets_df, incident_count_df, left_on='Number', right_index=True, how='left')
+    # Count number of incidents impacted and list incident numbers for each problem ticket
+    num_impacted_incidents = []
+    impacted_incident_numbers = []
+
+    for i in range(len(problem_ticket_texts)):
+        impacted_count = 0
+        impacted_numbers = []
+
+        for j in range(len(short_description_texts)):
+            # Check if any similarity score exceeds the threshold
+            if (similarity_short_description[i, j] >= threshold or
+                similarity_description[i, j] >= threshold or
+                similarity_resolution_notes[i, j] >= threshold or
+                similarity_tag[i, j] >= threshold):
+                
+                impacted_count += 1
+                impacted_numbers.append(incidents_df.iloc[j]['Number'])  # Assuming 'Number' is the incident ID
+
+        num_impacted_incidents.append(impacted_count)
+        impacted_incident_numbers.append(impacted_numbers)
+
+    # Add the results to the problem_tickets_df
+    problem_tickets_df['num_impacted_incidents'] = num_impacted_incidents
+    problem_tickets_df['impacted_incident_numbers'] = impacted_incident_numbers
 
     # Save the DataFrame to an Excel file
     output_excel_file = 'output.xlsx'
-    merged_df.to_excel(output_excel_file, index=False)  # Set index=False to avoid saving DataFrame index as a separate column
+    problem_tickets_df.to_excel(output_excel_file, index=False)
 
     return output_excel_file
 
